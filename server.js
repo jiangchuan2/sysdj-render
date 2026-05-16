@@ -145,7 +145,7 @@ app.post('/api/checkAdminPassword', (req, res) => {
 // Generate QR code
 app.get('/api/generateQR', (req, res) => {
   const lab = req.query.lab || 'default';
-  const url = 'https://sysdj.vercel.app/pages/register/register?lab=' + encodeURIComponent(lab);
+  const url = 'https://sysdj-render.onrender.com/pages/register/register?lab=' + encodeURIComponent(lab);
   res.json({ success: true, data: { url, lab } });
 });
 
