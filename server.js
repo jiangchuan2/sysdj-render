@@ -102,8 +102,9 @@ app.post('/api/generateLabQR', async (req, res) => {
     const labDoc = await Lab.findOne({ name: lab });
     if (!labDoc) return res.status(404).json({ success: false, error: '实验室不存在' });
 
-    // Already generated, return existing
-    if (labDoc.qrGenerated && labDoc.qrCode) {
+    // Already generated and not force, return existing
+    const force = req.body.force === true || req.body.force === 'true';
+    if (labDoc.qrGenerated && labDoc.qrCode && !force) {
       return res.json({ success: true, message: '二维码已存在', existed: true });
     }
 
