@@ -9,7 +9,10 @@ app.use(express.json());
 const MONGODB_URI = process.env.MONGODB_URI;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '9850';
 
-// Schemas
+console.log('Starting server...');
+console.log('MONGODB_URI set:', !!MONGODB_URI);
+console.log('MONGODB_URI starts with:', MONGODB_URI ? MONGODB_URI.substring(0, 20) + '...' : 'NOT SET');
+
 const labSchema = new mongoose.Schema({ name: String }, { collection: 'lab_list' });
 const registerSchema = new mongoose.Schema({
   lab: String, name: String, studentId: String, phone: String,
@@ -19,13 +22,30 @@ const registerSchema = new mongoose.Schema({
 const Lab = mongoose.model('Lab', labSchema);
 const Register = mongoose.model('Register', registerSchema);
 
-// Connect
-mongoose.connect(MONGODB_URI).then(() => console.log('MongoDB connected')).catch(err => console.error('MongoDB error:', err));
+mongoose.connect(MONGODB_URI, {
+  serverSelectionTimeoutMS: 15000,
+  socketTimeoutMS: 45000
+}).then(() => {
+  console.log('MongoDB connected successfully');
+}).catch(err => {
+  console.error('MongoDB connection error:', err.message);
+});
 
-app.get('/', (req, res) => res.json({ status: 'ok' }));
+mongoose.connection.on('error', err => {
+  console.error('MongoDB runtime error:', err.message);
+});
+
+mongoose.connection.on('disconnected', () => {
+  console.log('MongoDB disconnected');
+});
+
+app.get('/', (req, res) => res.json({ status: 'ok', dbState: mongoose.connection.readyState }));
 
 app.get('/api/getLabList', async (req, res) => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(500).json({ success: false, error: 'DB not connected, state: ' + mongoose.connection.readyState });
+    }
     const labs = await Lab.find({}).sort({ name: 1 });
     res.json({ success: true, data: labs.map(l => l.name) });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
