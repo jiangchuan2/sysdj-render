@@ -14,7 +14,13 @@ let clientPromise;
 
 function getClient() {
   if (!clientPromise) {
-    client = new MongoClient(MONGODB_URI);
+    const uri = MONGODB_URI;
+    client = new MongoClient(uri, {
+      tls: true,
+      tlsAllowInvalidCertificates: false,
+      retryWrites: true,
+      w: 'majority'
+    });
     clientPromise = client.connect();
   }
   return clientPromise;
@@ -25,12 +31,10 @@ async function getDb() {
   return c.db('sysdj');
 }
 
-// Health check
 app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'sysdj-lab-register' });
 });
 
-// Get lab list
 app.get('/api/getLabList', async (req, res) => {
   try {
     const db = await getDb();
@@ -42,44 +46,35 @@ app.get('/api/getLabList', async (req, res) => {
   }
 });
 
-// Submit registration
 app.post('/api/submitRegister', async (req, res) => {
   try {
     const db = await getDb();
     const { lab, name, studentId, phone, fromScan } = req.body;
     
     if (!lab || !name || !studentId || !phone) {
-      return res.status(400).json({ success: false, error: 'Missing required fields' });
+      return res.status(400).json({ success: false, error: 'Missing fields' });
     }
     
     const now = new Date();
-    const dateStr = now.toISOString().split('T')[0];
-    const timeStr = now.toTimeString().split(' ')[0];
-    
     await db.collection('registers').insertOne({
       lab, name, studentId, phone,
       fromScan: !!fromScan,
-      date: dateStr,
-      time: timeStr,
+      date: now.toISOString().split('T')[0],
+      time: now.toTimeString().split(' ')[0],
       createdAt: now
     });
     
-    res.json({ success: true, message: 'Registration successful' });
+    res.json({ success: true });
   } catch (error) {
     console.error('submitRegister error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Get all registrations
 app.get('/api/getRegisters', async (req, res) => {
   try {
     const db = await getDb();
-    const records = await db.collection('registers')
-      .find({})
-      .sort({ createdAt: -1 })
-      .limit(500)
-      .toArray();
+    const records = await db.collection('registers').find({}).sort({ createdAt: -1 }).limit(500).toArray();
     res.json({ success: true, data: records });
   } catch (error) {
     console.error('getRegisters error:', error);
@@ -87,66 +82,45 @@ app.get('/api/getRegisters', async (req, res) => {
   }
 });
 
-// Add lab
 app.post('/api/addLab', async (req, res) => {
   try {
     const { name, password } = req.body;
-    if (password !== ADMIN_PASSWORD) {
-      return res.status(403).json({ success: false, error: 'Wrong password' });
-    }
-    if (!name) {
-      return res.status(400).json({ success: false, error: 'Lab name required' });
-    }
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ success: false, error: 'Wrong password' });
+    if (!name) return res.status(400).json({ success: false, error: 'Name required' });
     
     const db = await getDb();
     const exists = await db.collection('lab_list').findOne({ name });
-    if (exists) {
-      return res.status(400).json({ success: false, error: 'Lab already exists' });
-    }
+    if (exists) return res.status(400).json({ success: false, error: 'Already exists' });
     
     await db.collection('lab_list').insertOne({ name });
-    res.json({ success: true, message: 'Lab added' });
+    res.json({ success: true });
   } catch (error) {
     console.error('addLab error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Delete lab
 app.post('/api/deleteLab', async (req, res) => {
   try {
     const { name, password } = req.body;
-    if (password !== ADMIN_PASSWORD) {
-      return res.status(403).json({ success: false, error: 'Wrong password' });
-    }
-    if (!name) {
-      return res.status(400).json({ success: false, error: 'Lab name required' });
-    }
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ success: false, error: 'Wrong password' });
     
     const db = await getDb();
     await db.collection('lab_list').deleteOne({ name });
-    res.json({ success: true, message: 'Lab deleted' });
+    res.json({ success: true });
   } catch (error) {
     console.error('deleteLab error:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
 
-// Check admin password
 app.post('/api/checkAdminPassword', (req, res) => {
   const { password } = req.body;
   if (password === ADMIN_PASSWORD) {
     res.json({ success: true });
   } else {
-    res.status(403).json({ success: false, error: 'Wrong password' });
+    res.status(403).json({ success: false });
   }
-});
-
-// Generate QR code
-app.get('/api/generateQR', (req, res) => {
-  const lab = req.query.lab || 'default';
-  const url = 'https://sysdj-render.onrender.com/pages/register/register?lab=' + encodeURIComponent(lab);
-  res.json({ success: true, data: { url, lab } });
 });
 
 const PORT = process.env.PORT || 3000;
