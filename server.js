@@ -16,7 +16,7 @@ const WX_SECRET = process.env.WX_SECRET || '';
 // Schemas
 const labSchema = new mongoose.Schema({
   name: { type: String, unique: true },
-  qrCode: { type: String, default: '' },  // base64 image
+  qrCode: { type: String, default: '' },
   qrGenerated: { type: Boolean, default: false }
 }, { collection: 'lab_list' });
 
@@ -53,10 +53,13 @@ function httpsRequest(url, options, body) {
 
 // Get WeChat access_token
 async function getWxToken() {
+  if (!WX_APPID || !WX_SECRET) {
+    throw new Error('未配置 WX_APPID 或 WX_SECRET 环境变量');
+  }
   const url = `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${WX_APPID}&secret=${WX_SECRET}`;
   const res = await httpsRequest(url, { method: 'GET' });
   if (res.access_token) return res.access_token;
-  throw new Error('Failed to get wx token: ' + JSON.stringify(res));
+  throw new Error('获取微信 access_token 失败: ' + JSON.stringify(res));
 }
 
 // Generate WeChat mini-program QR code
@@ -76,6 +79,16 @@ async function generateWxQR(scene, page) {
   }, body);
 }
 
+// Validate that a buffer is a real image (JPEG/PNG header)
+function isImageBuffer(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 8) return false;
+  // JPEG: starts with FF D8 FF
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return true;
+  // PNG: starts with 89 50 4E 47
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return true;
+  return false;
+}
+
 app.get('/', (req, res) => res.json({ status: 'ok', db: mongoose.connection.readyState }));
 
 // Get labs (with qrGenerated flag)
@@ -92,7 +105,7 @@ app.get('/api/getLabList', async (req, res) => {
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// Generate QR for a lab (one-time)
+// Generate QR for a lab
 app.post('/api/generateLabQR', async (req, res) => {
   try {
     const { lab, password } = req.body;
@@ -102,14 +115,9 @@ app.post('/api/generateLabQR', async (req, res) => {
     const labDoc = await Lab.findOne({ name: lab });
     if (!labDoc) return res.status(404).json({ success: false, error: '实验室不存在' });
 
-    // Already generated and not force, return existing
     const force = req.body.force === true || req.body.force === 'true';
     if (labDoc.qrGenerated && labDoc.qrCode && !force) {
       return res.json({ success: true, message: '二维码已存在', existed: true });
-    }
-
-    if (!WX_APPID || !WX_SECRET) {
-      return res.status(500).json({ success: false, error: '未配置微信AppID/Secret' });
     }
 
     // Generate WeChat QR code
@@ -118,9 +126,16 @@ app.post('/api/generateLabQR', async (req, res) => {
       'pages/register/register'
     );
 
-    // Check if it's an error JSON
-    if (qrBuffer.errcode) {
-      return res.status(500).json({ success: false, error: '微信API错误: ' + qrBuffer.errmsg });
+    // Check if it's an error JSON object (not a real image)
+    if (!Buffer.isBuffer(qrBuffer) || qrBuffer.errcode) {
+      const errMsg = qrBuffer.errmsg || qrBuffer.errcode || JSON.stringify(qrBuffer);
+      return res.status(500).json({ success: false, error: '微信API错误: ' + errMsg });
+    }
+
+    // Validate it's a real image
+    if (!isImageBuffer(qrBuffer)) {
+      const preview = qrBuffer.toString('utf8', 0, Math.min(200, qrBuffer.length));
+      return res.status(500).json({ success: false, error: '微信返回的不是图片: ' + preview });
     }
 
     // Store as base64
@@ -149,8 +164,31 @@ app.get('/api/getLabQR', async (req, res) => {
       return res.status(404).json({ success: false, error: '二维码未生成，请先在管理后台生成' });
     }
 
-    // Return base64 data URL
     res.json({ success: true, data: labDoc.qrCode });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Reset QR codes for all labs (admin only, for fixing corrupted data)
+app.post('/api/resetAllQR', async (req, res) => {
+  try {
+    const { password } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ success: false, error: '密码错误' });
+
+    const result = await Lab.updateMany({}, { $set: { qrCode: '', qrGenerated: false } });
+    res.json({ success: true, message: `已重置 ${result.modifiedCount} 个实验室的二维码` });
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Reset QR code for a single lab (admin only)
+app.post('/api/resetLabQR', async (req, res) => {
+  try {
+    const { lab, password } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ success: false, error: '密码错误' });
+    if (!lab) return res.status(400).json({ success: false, error: '缺少实验室名称' });
+
+    const result = await Lab.updateOne({ name: lab }, { $set: { qrCode: '', qrGenerated: false } });
+    if (result.matchedCount === 0) return res.status(404).json({ success: false, error: '实验室不存在' });
+    res.json({ success: true, message: `已重置 ${lab} 的二维码` });
   } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
