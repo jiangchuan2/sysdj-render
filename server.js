@@ -16,9 +16,19 @@ const WX_SECRET = process.env.WX_SECRET || '';
 // Schemas
 const labSchema = new mongoose.Schema({
   name: { type: String, unique: true },
+  labId: { type: Number, unique: true },
   qrCode: { type: String, default: '' },
   qrGenerated: { type: Boolean, default: false }
 }, { collection: 'lab_list' });
+
+// Auto-increment labId
+labSchema.pre('save', async function(next) {
+  if (this.isNew && !this.labId) {
+    const last = await Lab.findOne().sort({ labId: -1 });
+    this.labId = last ? last.labId + 1 : 1;
+  }
+  next();
+});
 
 const registerSchema = new mongoose.Schema({
   lab: String, name: String, studentId: String, phone: String,
@@ -71,7 +81,8 @@ async function generateWxQR(scene, page) {
     page: page,
     width: 430,
     auto_color: false,
-    line_color: { r: 7, g: 193, b: 96 }
+    line_color: { r: 7, g: 193, b: 96 },
+    check_path: false
   });
   return await httpsRequest(url, {
     method: 'POST',
@@ -99,6 +110,7 @@ app.get('/api/getLabList', async (req, res) => {
       success: true,
       data: labs.map(l => ({
         name: l.name,
+        labId: l.labId,
         qrGenerated: l.qrGenerated
       }))
     });
@@ -120,9 +132,9 @@ app.post('/api/generateLabQR', async (req, res) => {
       return res.json({ success: true, message: '二维码已存在', existed: true });
     }
 
-    // Generate WeChat QR code
+    // Generate WeChat QR code (use numeric labId, no Chinese)
     const qrBuffer = await generateWxQR(
-      'lab=' + encodeURIComponent(lab),
+      'id=' + labDoc.labId,
       'pages/register/register'
     );
 
